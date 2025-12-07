@@ -26,7 +26,8 @@ if (process.env.NODE_ENV === 'production') {
     app.use(express.static(distPath));
 
     // Handle SPA routing - return index.html for any unknown route
-    app.get('*', (req, res) => {
+    // Express 5 requires specific syntax for wildcards, or regex.
+    app.get(/(.*)/, (req, res) => {
         res.sendFile(path.join(distPath, 'index.html'));
     });
 }
