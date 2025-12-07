@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>0xTERMINAL // UPLINK ESTABLISHED</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;700&family=VT323&display=swap" rel="stylesheet">
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              mono: ['"Fira Code"', '"VT323"', 'monospace'],
+              terminal: ['"VT323"', 'monospace'],
+            },
+            colors: {
+              'hacker-green': '#0f0',
+              'hacker-dark': '#0d0208',
+              'hacker-dim': '#003b00',
+              'hacker-amber': '#ffb000',
+            },
+            animation: {
+              'blink': 'blink 1s step-end infinite',
+              'flicker': 'flicker 0.15s infinite',
+              'flicker-red': 'flickerRed 0.15s infinite',
+              'scanline': 'scanline 8s linear infinite',
+            },
+            keyframes: {
+              blink: {
+                '0%, 100%': { opacity: '1' },
+                '50%': { opacity: '0' },
+              },
+              flicker: {
+                '0%': { opacity: '0.9' },
+                '50%': { opacity: '1.0' },
+                '100%': { opacity: '0.9' },
+              },
+              flickerRed: {
+                '0%': { opacity: '0.8', color: '#f87171' },
+                '50%': { opacity: '1.0', color: '#ef4444' },
+                '100%': { opacity: '0.8', color: '#f87171' },
+              },
+              scanline: {
+                '0%': { transform: 'translateY(-100%)' },
+                '100%': { transform: 'translateY(100%)' },
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      body {
+        background-color: #000;
+        color: #0f0;
+        overflow: hidden;
+        margin: 0;
+        padding: 0;
+      }
+      /* Custom Scrollbar */
+      ::-webkit-scrollbar {
+        width: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #001100; 
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #004400; 
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #006600; 
+      }
+      
+      .crt-overlay {
+        background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+        background-size: 100% 2px, 3px 100%;
+        pointer-events: none;
+      }
+      
+      .text-glow {
+        text-shadow: 0 0 5px rgba(0, 255, 0, 0.5);
+      }
+      
+      .text-glow-amber {
+        text-shadow: 0 0 5px rgba(255, 176, 0, 0.5);
+      }
+      
+      .text-glow-red {
+        text-shadow: 0 0 5px rgba(255, 0, 0, 0.5);
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.2.1/",
+    "react": "https://aistudiocdn.com/react@^19.2.1",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.31.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body>
+    <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>

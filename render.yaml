@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: 0xterminal
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: cross-env NODE_ENV=production npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
