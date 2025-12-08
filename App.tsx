@@ -60,6 +60,60 @@ const App: React.FC = () => {
     }
   }, []);
 
+  const playChirp = useCallback(() => {
+    if (!audioCtxRef.current || audioCtxRef.current.state === 'suspended') return;
+    const ctx = audioCtxRef.current;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(800, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(400, ctx.currentTime + 0.1);
+
+    gain.gain.setValueAtTime(0.1, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.1);
+  }, []);
+
+  const playKeystroke = useCallback(() => {
+    if (!audioCtxRef.current || audioCtxRef.current.state === 'suspended') return;
+    const ctx = audioCtxRef.current;
+
+    // Simple noise burst for keypress
+    const bufferSize = ctx.sampleRate * 0.05; // 50ms
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = Math.random() * 2 - 1;
+    }
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.05;
+
+    // random pitch
+    noise.playbackRate.value = 0.8 + Math.random() * 0.4;
+
+    noise.connect(gain);
+    gain.connect(ctx.destination);
+    noise.start();
+  }, []);
+
+  const scrambleText = useCallback((text: string) => {
+    const chars = '0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~';
+    // Deterministic scramble based on length to limit flickering speed if re-rendered
+    // But we want cool flickering, so random is fine
+    return text.split('').map(c => {
+      if (c === ' ') return ' ';
+      return Math.random() > 0.5 ? chars[Math.floor(Math.random() * chars.length)] : c;
+    }).join('');
+  }, []);
+
   const bootRef = useRef(false);
 
   // Boot sequence effect
@@ -155,10 +209,29 @@ const App: React.FC = () => {
         const newState = !isEncryptedMode;
         setIsEncryptedMode(newState);
         if (newState) {
-          addSystemMessage('Encryption protocols ENGAGED. Outgoing traffic obscured.', MessageType.INFO);
+          addSystemMessage('Encryption protocols ENGAGED. outgoing traffic secured.', MessageType.INFO);
         } else {
           addSystemMessage('Encryption protocols DISABLED. Traffic is plain-text.', MessageType.SYSTEM);
         }
+        break;
+      case 'scan':
+        addSystemMessage('Initiating network scan...', MessageType.INFO);
+        socketService.sendCommand('cmd_scan');
+        break;
+      case 'nuke':
+        addSystemMessage('WARNING: INITIATING GLOBAL PURGE...', MessageType.ERROR);
+        setTimeout(() => {
+          socketService.sendCommand('cmd_nuke');
+        }, 1000);
+        break;
+      case 'dm':
+        if (args.length < 2) {
+          addSystemMessage('Usage: /dm <target_alias> <message>', MessageType.ERROR);
+          return;
+        }
+        const target = args[0];
+        const content = args.slice(1).join(' ');
+        socketService.sendCommand('cmd_dm', { target, content, encrypted: isEncryptedMode });
         break;
       default:
         addSystemMessage(`Command not recognized: ${cmd}`, MessageType.ERROR);
@@ -171,16 +244,46 @@ const App: React.FC = () => {
       // Callback for processing incoming messages
       const onIncomingMessage = (msg: Message) => {
         setMessages(prev => [...prev, msg]);
+        playChirp();
       };
 
-      socketService.connect(user.alias, onIncomingMessage);
+      const onHistory = (historyMsgs: Message[]) => {
+        // Prepend history, avoiding duplicates if any
+        // We just blindly add them for now assuming history creates base state
+        setMessages(prev => {
+          // Filter out duplicates based on ID
+          const existingIds = new Set(prev.map(m => m.id));
+          const newHistory = historyMsgs.filter(m => !existingIds.has(m.id));
+          const sorted = [...newHistory, ...prev].sort((a, b) => a.timestamp - b.timestamp);
+          return sorted;
+        });
+      };
+
+      socketService.connect(user.alias, onIncomingMessage, onHistory);
+
+      // Listen for custom command results
+      socketService.on('scan_result', (usersList: any[]) => {
+        addSystemMessage('Scanning network nodes...', MessageType.INFO);
+        setTimeout(() => {
+          usersList.forEach(u => {
+            addSystemMessage(`[DETECTED] ${u.alias} :: IP [MASKED]`, MessageType.INFO);
+          });
+          addSystemMessage(`Scan Complete. ${usersList.length} nodes active.`, MessageType.SYSTEM);
+        }, 800);
+      });
+
+      socketService.on('nuke_event', () => {
+        setMessages([]);
+        addSystemMessage('*** WARNING: SYSTEM PURGE DETECTED ***', MessageType.ERROR);
+      });
+
     }
     return () => {
-      // Optional: disconnect on unmount or logout? 
-      // We'll keep it simple for now, maybe don't fully disconnect to avoid re-joins on hot reload flickers
-      // socketService.disconnect();
+      // Cleanup listeners if needed
+      socketService.off('scan_result');
+      socketService.off('nuke_event');
     };
-  }, [user]);
+  }, [user, playChirp]);
 
   const handleSendMessage = useCallback(async (text: string) => {
     if (!text.trim()) return;
@@ -227,11 +330,12 @@ const App: React.FC = () => {
       encrypted: isEncryptedMode
     };
     setMessages(prev => [...prev, userMsg]);
+    playKeystroke();
 
     // Send via Socket
     socketService.sendMessage(text, isEncryptedMode);
 
-  }, [user, isEncryptedMode, initAudio]);
+  }, [user, isEncryptedMode, initAudio, playKeystroke]);
 
   return (
     <div className="relative w-full h-screen bg-black text-green-500 overflow-hidden flex flex-col font-mono selection:bg-green-900 selection:text-white">
@@ -260,7 +364,14 @@ const App: React.FC = () => {
         </header>
 
         {/* Terminal Output */}
-        <TerminalOutput messages={messages} />
+        <TerminalOutput messages={messages.map(m => {
+          // Apply visual encryption
+          const shouldScramble = m.encrypted && !isEncryptedMode;
+          return {
+            ...m,
+            content: shouldScramble ? scrambleText(m.content) : m.content
+          };
+        })} />
 
         {/* Interaction Area */}
         <div className="p-0">
