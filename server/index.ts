@@ -9,7 +9,7 @@ const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
     cors: {
-        origin: "*",
+        origin: process.env.CLIENT_URL || ["http://localhost:5173", "http://127.0.0.1:5173"],
         methods: ["GET", "POST"]
     }
 });
@@ -41,6 +41,28 @@ interface User {
 const users: Record<string, User> = {};
 const messageHistory: any[] = [];
 const MAX_HISTORY = 50;
+
+const RATE_LIMIT_WINDOW = 1000; // 1 second
+const MAX_MSGS_PER_WINDOW = 5;
+const MAX_MSG_LENGTH = 500;
+const ADMIN_KEY = process.env.ADMIN_KEY || 'force_override';
+
+const rateLimits: Record<string, { count: number, start: number }> = {};
+
+function checkRateLimit(socketId: string): boolean {
+    const now = Date.now();
+    const limit = rateLimits[socketId] || { count: 0, start: now };
+
+    if (now - limit.start > RATE_LIMIT_WINDOW) {
+        limit.count = 1;
+        limit.start = now;
+    } else {
+        limit.count++;
+    }
+
+    rateLimits[socketId] = limit;
+    return limit.count <= MAX_MSGS_PER_WINDOW;
+}
 
 function addMessageToHistory(msg: any) {
     messageHistory.push(msg);
@@ -85,56 +107,88 @@ io.on('connection', (socket: Socket) => {
 
     socket.on('message', (message: any) => {
         const user = users[socket.id];
-        if (!user) return; // Ignore if not joined
+        if (!user) return;
 
+        if (!checkRateLimit(socket.id)) {
+            socket.emit('message', {
+                id: crypto.randomUUID(),
+                type: 'error',
+                sender: 'SYSTEM',
+                content: 'Rate limit exceeded. Cool down.',
+                timestamp: Date.now()
+            });
+            return;
+        }
+
+        // Validate payload size
+        const safeContent = String(message.content || '').substring(0, MAX_MSG_LENGTH);
+        if (!safeContent) return;
+
+        // SANITIZATION: Construct trusted message object
         const broadcastMsg = {
-            ...message,
-            timestamp: Date.now(), // Server-side timestamp authority
-            sender: user.alias // Ensure sender is trusted alias
+            id: crypto.randomUUID(),
+            type: 'peer', // Force type to Peer/User
+            sender: user.alias, // Force sender to be the trusted user alias
+            content: safeContent,
+            encrypted: Boolean(message.encrypted),
+            timestamp: Date.now()
         };
 
-        // Add to history
         addMessageToHistory(broadcastMsg);
-
         socket.broadcast.emit('message', broadcastMsg);
     });
 
     // Custom Commands handled by server
     socket.on('cmd_scan', () => {
+        if (!checkRateLimit(socket.id)) return;
         const userList = Object.values(users).map(u => ({ alias: u.alias, ip: 'MASKED' }));
         socket.emit('scan_result', userList);
     });
 
-    socket.on('cmd_nuke', () => {
-        messageHistory.length = 0; // Clear history
-        io.emit('nuke_event'); // Tell everyone to clear
+    socket.on('cmd_nuke', (key: string) => {
+        // Simple auth check
+        if (key !== ADMIN_KEY) {
+            socket.emit('message', {
+                id: crypto.randomUUID(),
+                type: 'error',
+                sender: 'SYSTEM',
+                content: 'ACCESS DENIED. Admin authorization required.',
+                timestamp: Date.now()
+            });
+            return;
+        }
+
+        messageHistory.length = 0;
+        io.emit('nuke_event');
         io.emit('message', {
             id: crypto.randomUUID(),
             type: 'system',
             sender: 'SYSTEM',
-            content: '*** CHANNEL SANITIZATION COMPLETE ***',
+            content: '*** CHANNEL SANITIZED BY ADMIN ***',
             timestamp: Date.now()
         });
     });
 
     socket.on('cmd_dm', ({ target, content, encrypted }: { target: string, content: string, encrypted: boolean }) => {
+        if (!checkRateLimit(socket.id)) return;
         const sender = users[socket.id];
         if (!sender) return;
 
-        // Find target socket
+        const safeContent = String(content || '').substring(0, MAX_MSG_LENGTH);
+
         const targetSocketId = Object.keys(users).find(id => users[id].alias === target);
 
         if (targetSocketId) {
             const dmMsg = {
                 id: crypto.randomUUID(),
-                type: 'peer', // or 'dm' if we add to types
+                type: 'peer',
                 sender: `${sender.alias} [PRIVATE]`,
-                content,
+                content: safeContent,
                 timestamp: Date.now(),
-                encrypted
+                encrypted: Boolean(encrypted)
             };
             io.to(targetSocketId).emit('message', dmMsg);
-            socket.emit('message', { ...dmMsg, sender: `To: ${target}` }); // Echo to sender
+            socket.emit('message', { ...dmMsg, sender: `To: ${target}` });
         } else {
             socket.emit('message', {
                 id: crypto.randomUUID(),
