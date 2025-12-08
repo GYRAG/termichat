@@ -13,7 +13,7 @@ class SocketService {
     public socket: Socket | null = null;
     private messageHandler: ((msg: Message) => void) | null = null;
 
-    public connect(alias: string, onMessage: (msg: Message) => void) {
+    public connect(alias: string, onMessage: (msg: Message) => void, onHistory?: (msgs: Message[]) => void) {
         if (this.socket) return;
 
         this.socket = io(SERVER_URL);
@@ -24,9 +24,11 @@ class SocketService {
             this.socket?.emit("join", alias);
         });
 
+        this.socket.on("history", (msgs: Message[]) => {
+            if (onHistory) onHistory(msgs);
+        });
+
         this.socket.on("message", (rawMsg: any) => {
-            // Map server message format to app Message type if needed
-            // Currently server sends mostly compatible format
             const msg: Message = {
                 id: rawMsg.id || crypto.randomUUID(),
                 type: rawMsg.type === 'system' ? MessageType.SYSTEM : MessageType.PEER,
@@ -60,8 +62,25 @@ class SocketService {
         this.socket.emit("message", {
             content,
             encrypted,
-            type: 'user' // generic type for server to broadcast
+            type: 'user'
         });
+    }
+
+    public sendCommand(cmd: string, payload?: any) {
+        if (!this.socket) return;
+        this.socket.emit(cmd, payload);
+    }
+
+    public on(event: string, callback: (...args: any[]) => void) {
+        if (this.socket) {
+            this.socket.on(event, callback);
+        }
+    }
+
+    public off(event: string) {
+        if (this.socket) {
+            this.socket.off(event);
+        }
     }
 
     public disconnect() {

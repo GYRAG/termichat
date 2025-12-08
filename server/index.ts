@@ -39,6 +39,15 @@ interface User {
 }
 
 const users: Record<string, User> = {};
+const messageHistory: any[] = [];
+const MAX_HISTORY = 50;
+
+function addMessageToHistory(msg: any) {
+    messageHistory.push(msg);
+    if (messageHistory.length > MAX_HISTORY) {
+        messageHistory.shift();
+    }
+}
 
 io.on('connection', (socket: Socket) => {
     console.log(`Connection attempted: ${socket.id}`);
@@ -54,14 +63,21 @@ io.on('connection', (socket: Socket) => {
         users[socket.id] = user;
         console.log(`User joined: ${user.alias} (${user.id})`);
 
+        // Send existing history to the new user
+        socket.emit('history', messageHistory);
+
         // Broadcast to others
-        socket.broadcast.emit('message', {
+        const joinMsg = {
             id: crypto.randomUUID(),
             type: 'system',
             sender: 'SYSTEM',
             content: `User ${user.alias} has joined the secure channel.`,
             timestamp: Date.now()
-        });
+        };
+        socket.broadcast.emit('message', joinMsg);
+
+        // Add join message to history
+        addMessageToHistory(joinMsg);
 
         // Confirm to user
         socket.emit('joined', user);
@@ -71,32 +87,79 @@ io.on('connection', (socket: Socket) => {
         const user = users[socket.id];
         if (!user) return; // Ignore if not joined
 
-        // Broadcast the message to everyone (including sender, or exclude sender if handled optimistic UI)
-        // Usually convenient to broadcast to everyone for sync, or broadcast to others and let sender handle own.
-        // App.tsx logic adds its own message locally, so we broadcast to others.
-        // wait, if we want strict ordering, we should emit to all. 
-        // But the current UI adds immediately. Let's broadcast to list exclude sender.
-
         const broadcastMsg = {
             ...message,
             timestamp: Date.now(), // Server-side timestamp authority
             sender: user.alias // Ensure sender is trusted alias
         };
 
+        // Add to history
+        addMessageToHistory(broadcastMsg);
+
         socket.broadcast.emit('message', broadcastMsg);
+    });
+
+    // Custom Commands handled by server
+    socket.on('cmd_scan', () => {
+        const userList = Object.values(users).map(u => ({ alias: u.alias, ip: 'MASKED' }));
+        socket.emit('scan_result', userList);
+    });
+
+    socket.on('cmd_nuke', () => {
+        messageHistory.length = 0; // Clear history
+        io.emit('nuke_event'); // Tell everyone to clear
+        io.emit('message', {
+            id: crypto.randomUUID(),
+            type: 'system',
+            sender: 'SYSTEM',
+            content: '*** CHANNEL SANITIZATION COMPLETE ***',
+            timestamp: Date.now()
+        });
+    });
+
+    socket.on('cmd_dm', ({ target, content, encrypted }: { target: string, content: string, encrypted: boolean }) => {
+        const sender = users[socket.id];
+        if (!sender) return;
+
+        // Find target socket
+        const targetSocketId = Object.keys(users).find(id => users[id].alias === target);
+
+        if (targetSocketId) {
+            const dmMsg = {
+                id: crypto.randomUUID(),
+                type: 'peer', // or 'dm' if we add to types
+                sender: `${sender.alias} [PRIVATE]`,
+                content,
+                timestamp: Date.now(),
+                encrypted
+            };
+            io.to(targetSocketId).emit('message', dmMsg);
+            socket.emit('message', { ...dmMsg, sender: `To: ${target}` }); // Echo to sender
+        } else {
+            socket.emit('message', {
+                id: crypto.randomUUID(),
+                type: 'error',
+                sender: 'SYSTEM',
+                content: `Target '${target}' not found.`,
+                timestamp: Date.now()
+            });
+        }
     });
 
     socket.on('disconnect', () => {
         const user = users[socket.id];
         if (user) {
             console.log(`User left: ${user.alias}`);
-            io.emit('message', {
+            const leaveMsg = {
                 id: crypto.randomUUID(),
                 type: 'system',
                 sender: 'SYSTEM',
                 content: `Connection lost: ${user.alias}`,
                 timestamp: Date.now()
-            });
+            };
+            io.emit('message', leaveMsg);
+            addMessageToHistory(leaveMsg);
+
             delete users[socket.id];
         }
     });
