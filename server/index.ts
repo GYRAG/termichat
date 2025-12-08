@@ -44,14 +44,21 @@ const MAX_HISTORY = 50;
 
 const RATE_LIMIT_WINDOW = 1000; // 1 second
 const MAX_MSGS_PER_WINDOW = 5;
+const PENALTY_DURATION = 5000;
 const MAX_MSG_LENGTH = 500;
 const ADMIN_KEY = process.env.ADMIN_KEY || 'force_override';
 
-const rateLimits: Record<string, { count: number, start: number }> = {};
+const rateLimits: Record<string, { count: number, start: number, penaltyUntil: number }> = {};
 
-function checkRateLimit(socketId: string): boolean {
+function checkRateLimit(socketId: string): { allowed: boolean, error?: string } {
     const now = Date.now();
-    const limit = rateLimits[socketId] || { count: 0, start: now };
+    const limit = rateLimits[socketId] || { count: 0, start: now, penaltyUntil: 0 };
+    rateLimits[socketId] = limit;
+
+    if (now < limit.penaltyUntil) {
+        const remaining = Math.ceil((limit.penaltyUntil - now) / 1000);
+        return { allowed: false, error: `Rate limit violation. Muted for ${remaining}s.` };
+    }
 
     if (now - limit.start > RATE_LIMIT_WINDOW) {
         limit.count = 1;
@@ -60,8 +67,12 @@ function checkRateLimit(socketId: string): boolean {
         limit.count++;
     }
 
-    rateLimits[socketId] = limit;
-    return limit.count <= MAX_MSGS_PER_WINDOW;
+    if (limit.count > MAX_MSGS_PER_WINDOW) {
+        limit.penaltyUntil = now + PENALTY_DURATION;
+        return { allowed: false, error: `Rate limit exceeded. Muted for 5s.` };
+    }
+
+    return { allowed: true };
 }
 
 function addMessageToHistory(msg: any) {
@@ -109,12 +120,14 @@ io.on('connection', (socket: Socket) => {
         const user = users[socket.id];
         if (!user) return;
 
-        if (!checkRateLimit(socket.id)) {
+        const limitCheck = checkRateLimit(socket.id);
+        if (!limitCheck.allowed) {
+            // Only emit error if not already spamming hard (optional, but good UX)
             socket.emit('message', {
                 id: crypto.randomUUID(),
                 type: 'error',
                 sender: 'SYSTEM',
-                content: 'Rate limit exceeded. Cool down.',
+                content: limitCheck.error || 'Rate limit exceeded.',
                 timestamp: Date.now()
             });
             return;
@@ -140,7 +153,7 @@ io.on('connection', (socket: Socket) => {
 
     // Custom Commands handled by server
     socket.on('cmd_scan', () => {
-        if (!checkRateLimit(socket.id)) return;
+        if (!checkRateLimit(socket.id).allowed) return;
         const userList = Object.values(users).map(u => ({ alias: u.alias, ip: 'MASKED' }));
         socket.emit('scan_result', userList);
     });
@@ -170,7 +183,7 @@ io.on('connection', (socket: Socket) => {
     });
 
     socket.on('cmd_dm', ({ target, content, encrypted }: { target: string, content: string, encrypted: boolean }) => {
-        if (!checkRateLimit(socket.id)) return;
+        if (!checkRateLimit(socket.id).allowed) return;
         const sender = users[socket.id];
         if (!sender) return;
 
