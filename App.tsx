@@ -219,9 +219,11 @@ const App: React.FC = () => {
         socketService.sendCommand('cmd_scan');
         break;
       case 'nuke':
+        // For now, hardcode the shared dev key or ask user
+        const key = args[0] || 'force_override';
         addSystemMessage('WARNING: INITIATING GLOBAL PURGE...', MessageType.ERROR);
         setTimeout(() => {
-          socketService.sendCommand('cmd_nuke');
+          socketService.sendCommand('cmd_nuke', key); // Send key as payload
         }, 1000);
         break;
       case 'dm':
